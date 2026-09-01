@@ -347,7 +347,7 @@ func TestConvertClaudeRequestToOpenAI_UnsignedThinkingOnlyMessageDropped(t *test
 	}
 }
 
-func TestConvertClaudeRequestToOpenAI_ReasoningMirrorsReasoningContent(t *testing.T) {
+func TestConvertClaudeRequestToOpenAI_ReasoningContentOnlyField(t *testing.T) {
 	inputJSON := `{
 		"model": "claude-3-opus",
 		"messages": [{
@@ -365,14 +365,11 @@ func TestConvertClaudeRequestToOpenAI_ReasoningMirrorsReasoningContent(t *testin
 	if !assistantMsg.Get("reasoning_content").Exists() {
 		t.Fatalf("reasoning_content missing. Output: %s", string(result))
 	}
-	if !assistantMsg.Get("reasoning").Exists() {
-		t.Fatalf("reasoning missing. Output: %s", string(result))
+	if got := assistantMsg.Get("reasoning_content").String(); got != "provider state" {
+		t.Fatalf("reasoning_content = %q, want provider state. Output: %s", got, string(result))
 	}
-	if got := assistantMsg.Get("reasoning").String(); got != assistantMsg.Get("reasoning_content").String() {
-		t.Fatalf("reasoning = %q, want same as reasoning_content = %q. Output: %s", got, assistantMsg.Get("reasoning_content").String(), string(result))
-	}
-	if got := assistantMsg.Get("reasoning").String(); got != "provider state" {
-		t.Fatalf("reasoning = %q, want provider state. Output: %s", got, string(result))
+	if assistantMsg.Get("reasoning").Exists() {
+		t.Fatalf("reasoning must not be emitted; it is selected per request at the executor layer. Output: %s", string(result))
 	}
 }
 

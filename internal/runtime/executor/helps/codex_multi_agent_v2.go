@@ -66,8 +66,19 @@ func sameByteSlice(a, b []byte) bool {
 }
 
 // TranslateRequestWithAPIKeyModelCompatibility applies compatibility-aware
-// request translators when a configured API-key model enables compatibility mode.
+// request translators when a configured API-key model enables compatibility
+// mode. For Claude->OpenAI chat payloads it also normalizes the historical
+// reasoning field to the dialect requested via the client's X-Reasoning-Format
+// header.
 func TranslateRequestWithAPIKeyModelCompatibility(ctx context.Context, headers http.Header, cfg *config.Config, from, to sdktranslator.Format, model string, payload []byte, stream, isCompat bool) []byte {
+	translated := translateRequestWithAPIKeyModelCompatibility(ctx, headers, cfg, from, to, model, payload, stream, isCompat)
+	if from == sdktranslator.FormatClaude && to == sdktranslator.FormatOpenAI {
+		return ApplyReasoningFormatFromHeaders(headers, translated)
+	}
+	return translated
+}
+
+func translateRequestWithAPIKeyModelCompatibility(ctx context.Context, headers http.Header, cfg *config.Config, from, to sdktranslator.Format, model string, payload []byte, stream, isCompat bool) []byte {
 	if !isCompat {
 		return TranslateRequestWithCodexMultiAgentV2(ctx, headers, cfg, from, to, model, payload, stream)
 	}

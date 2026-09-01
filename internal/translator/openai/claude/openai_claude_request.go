@@ -255,12 +255,12 @@ func convertClaudeRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 							msgJSON, _ = sjson.SetBytes(msgJSON, "content", "")
 						}
 
-						// Add reasoning_content if present. Also mirror it into the
-						// OpenRouter-style "reasoning" field so upstreams reading
-						// either field see the same historical thinking text.
+						// Add reasoning_content if present. The wire shape
+						// (reasoning_content vs the OpenRouter-style "reasoning")
+						// is selected per request at the executor layer via
+						// helps.ApplyReasoningFormatFromHeaders.
 						if hasReasoning {
 							msgJSON, _ = sjson.SetBytes(msgJSON, "reasoning_content", reasoningContent)
-							msgJSON, _ = sjson.SetBytes(msgJSON, "reasoning", reasoningContent)
 						}
 
 						// Add tool_calls if present (in same message as content)

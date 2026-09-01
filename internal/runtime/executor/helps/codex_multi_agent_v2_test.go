@@ -3,6 +3,7 @@ package helps
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
@@ -176,6 +177,72 @@ func TestSameByteSlice(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := sameByteSlice(tc.a, tc.b); got != tc.want {
 				t.Fatalf("sameByteSlice() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// claudeThinkingHistoryPayload builds a Claude request whose assistant turn
+// carries a signed thinking block that survives translation as reasoning.
+func claudeThinkingHistoryPayload(signature string) []byte {
+	return []byte(`{
+		"model": "claude-3-opus",
+		"messages": [{
+			"role": "assistant",
+			"content": [
+				{"type": "thinking", "thinking": "provider state", "signature": "` + signature + `"},
+				{"type": "text", "text": "visible answer"}
+			]
+		}]
+	}`)
+}
+
+// gptCompatibleThinkingSignature mirrors the GPT chat-compatible thinking
+// signature shape accepted by the request translator.
+func gptCompatibleThinkingSignature() string {
+	raw := make([]byte, 1+8+16+16+32)
+	raw[0] = 0x80
+	raw[8] = 1
+	for i := 9; i < len(raw); i++ {
+		raw[i] = byte(i)
+	}
+	return base64.URLEncoding.EncodeToString(raw)
+}
+
+// TestTranslateRequestWithAPIKeyModelCompatibilityReasoningFormat pins the
+// X-Reasoning-Format gate for both the registry path (isCompat=false) and the
+// compat path (isCompat=true) on the Claude->OpenAI request translation.
+func TestTranslateRequestWithAPIKeyModelCompatibilityReasoningFormat(t *testing.T) {
+	cfg := &config.Config{}
+	for _, isCompat := range []bool{false, true} {
+		signature := ""
+		if !isCompat {
+			// The registry path drops unsigned thinking blocks, so a
+			// GPT-compatible signature is required to keep the reasoning.
+			signature = gptCompatibleThinkingSignature()
+		}
+		payload := claudeThinkingHistoryPayload(signature)
+
+		t.Run(fmt.Sprintf("isCompat=%t/openrouter header renames reasoning", isCompat), func(t *testing.T) {
+			headers := http.Header{"X-Reasoning-Format": {"openrouter"}}
+			result := TranslateRequestWithAPIKeyModelCompatibility(context.Background(), headers, cfg, sdktranslator.FormatClaude, sdktranslator.FormatOpenAI, "gpt-5", payload, false, isCompat)
+			assistant := gjson.GetBytes(result, "messages.0")
+			if got := assistant.Get("reasoning").String(); got != "provider state" {
+				t.Fatalf("messages.0.reasoning = %q, want provider state. Output: %s", got, string(result))
+			}
+			if assistant.Get("reasoning_content").Exists() {
+				t.Fatalf("messages.0.reasoning_content must be renamed. Output: %s", string(result))
+			}
+		})
+
+		t.Run(fmt.Sprintf("isCompat=%t/missing header keeps reasoning_content", isCompat), func(t *testing.T) {
+			result := TranslateRequestWithAPIKeyModelCompatibility(context.Background(), http.Header{}, cfg, sdktranslator.FormatClaude, sdktranslator.FormatOpenAI, "gpt-5", payload, false, isCompat)
+			assistant := gjson.GetBytes(result, "messages.0")
+			if got := assistant.Get("reasoning_content").String(); got != "provider state" {
+				t.Fatalf("messages.0.reasoning_content = %q, want provider state. Output: %s", got, string(result))
+			}
+			if assistant.Get("reasoning").Exists() {
+				t.Fatalf("messages.0.reasoning must not be emitted without the header. Output: %s", string(result))
 			}
 		})
 	}

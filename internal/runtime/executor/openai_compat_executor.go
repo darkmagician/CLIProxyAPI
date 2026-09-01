@@ -205,6 +205,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	reporter.Publish(ctx, helps.ParseOpenAIUsage(body))
 	// Ensure we at least record the request even if upstream doesn't return usage
 	reporter.EnsurePublished(ctx)
+	if responseFormat == sdktranslator.FormatClaude {
+		body = helps.ApplyReasoningFormatToResponseFromHeaders(opts.Headers, body)
+	}
 	// Translate response back to source format when needed
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, body, &param)
@@ -480,6 +483,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				}
 			}
 
+			if responseFormat == sdktranslator.FormatClaude {
+				dataPayload = helps.ApplyReasoningFormatToResponseFromHeaders(opts.Headers, dataPayload)
+			}
 			streamLine := append([]byte("data: "), dataPayload...)
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, streamLine, &param, claudeInputTokens)
 			for i := range chunks {
