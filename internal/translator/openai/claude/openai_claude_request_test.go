@@ -347,6 +347,35 @@ func TestConvertClaudeRequestToOpenAI_UnsignedThinkingOnlyMessageDropped(t *test
 	}
 }
 
+func TestConvertClaudeRequestToOpenAI_ReasoningMirrorsReasoningContent(t *testing.T) {
+	inputJSON := `{
+		"model": "claude-3-opus",
+		"messages": [{
+			"role": "assistant",
+			"content": [
+				{"type": "thinking", "thinking": "provider state", "signature": "` + validGPTChatReasoningSignature() + `"},
+				{"type": "text", "text": "visible answer"}
+			]
+		}]
+	}`
+
+	result := ConvertClaudeRequestToOpenAI("gpt-5", []byte(inputJSON), false)
+	assistantMsg := gjson.GetBytes(result, "messages.0")
+
+	if !assistantMsg.Get("reasoning_content").Exists() {
+		t.Fatalf("reasoning_content missing. Output: %s", string(result))
+	}
+	if !assistantMsg.Get("reasoning").Exists() {
+		t.Fatalf("reasoning missing. Output: %s", string(result))
+	}
+	if got := assistantMsg.Get("reasoning").String(); got != assistantMsg.Get("reasoning_content").String() {
+		t.Fatalf("reasoning = %q, want same as reasoning_content = %q. Output: %s", got, assistantMsg.Get("reasoning_content").String(), string(result))
+	}
+	if got := assistantMsg.Get("reasoning").String(); got != "provider state" {
+		t.Fatalf("reasoning = %q, want provider state. Output: %s", got, string(result))
+	}
+}
+
 func validGPTChatReasoningSignature() string {
 	raw := make([]byte, 1+8+16+16+32)
 	raw[0] = 0x80

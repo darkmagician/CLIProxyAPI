@@ -577,3 +577,129 @@ func TestStreamingTool_OmittedToolCallIndexPreservesParallelCalls(t *testing.T) 
 		t.Fatalf("stop_reason = %q, want %q", got, "tool_use")
 	}
 }
+
+// streamingReasoningDeltas collects thinking_delta payloads from stream events.
+func streamingReasoningDeltas(events []sseEvent) []string {
+	var out []string
+	for _, e := range events {
+		if e.Type == "content_block_delta" && gjson.Get(e.Payload, "delta.type").String() == "thinking_delta" {
+			out = append(out, gjson.Get(e.Payload, "delta.thinking").String())
+		}
+	}
+	return out
+}
+
+func TestStreamingReasoning_FallbackToReasoningField(t *testing.T) {
+	events := runStream(t, streamReq,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning":"thinking via reasoning"}},"finish_reason":null}]}`,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}]}`,
+	)
+
+	deltas := streamingReasoningDeltas(events)
+	if len(deltas) != 1 || deltas[0] != "thinking via reasoning" {
+		t.Fatalf("thinking deltas = %v, want [thinking via reasoning] (events=%+v)", deltas, events)
+	}
+	thinkingStarts := 0
+	for _, e := range events {
+		if e.Type == "content_block_start" && gjson.Get(e.Payload, "content_block.type").String() == "thinking" {
+			thinkingStarts++
+		}
+	}
+	if thinkingStarts != 1 {
+		t.Fatalf("expected one thinking content_block_start, got %d (events=%+v)", thinkingStarts, events)
+	}
+}
+
+func TestStreamingReasoning_PrefersReasoningContent(t *testing.T) {
+	events := runStream(t, streamReq,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"deepseek style","reasoning":"openrouter style"}},"finish_reason":null}]}`,
+	)
+
+	deltas := streamingReasoningDeltas(events)
+	if len(deltas) != 1 || deltas[0] != "deepseek style" {
+		t.Fatalf("thinking deltas = %v, want [deepseek style] (events=%+v)", deltas, events)
+	}
+}
+
+func TestStreamingReasoning_EmptyReasoningContentFallsBack(t *testing.T) {
+	events := runStream(t, streamReq,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"","reasoning":"fallback text"}},"finish_reason":null}]}`,
+	)
+
+	deltas := streamingReasoningDeltas(events)
+	if len(deltas) != 1 || deltas[0] != "fallback text" {
+		t.Fatalf("thinking deltas = %v, want [fallback text] (events=%+v)", deltas, events)
+	}
+}
+
+func TestStreamingReasoning_NullReasoningEmitsNothing(t *testing.T) {
+	events := runStream(t, streamReq,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":null,"reasoning":null,"content":"answer"},"finish_reason":"stop"}]}`,
+	)
+
+	if deltas := streamingReasoningDeltas(events); len(deltas) != 0 {
+		t.Fatalf("expected no thinking deltas, got %v", deltas)
+	}
+}
+
+func nonStreamThinkingBlocks(t *testing.T, payload []byte) [][]byte {
+	t.Helper()
+	blocks := gjson.GetBytes(payload, "content").Array()
+	var thinking []([]byte)
+	for _, b := range blocks {
+		if b.Get("type").String() == "thinking" {
+			thinking = append(thinking, []byte(b.Get("thinking").String()))
+		}
+	}
+	return thinking
+}
+
+func TestNonStreamReasoning_ConvertOpenAINonStreamingFallback(t *testing.T) {
+	// convertOpenAINonStreamingToAnthropic path: stream flag absent in original request.
+	var paramAny any
+	out := ConvertOpenAIResponseToClaude(
+		context.Background(),
+		"",
+		[]byte(`{}`),
+		nil,
+		[]byte(`data: {"id":"c1","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"answer","reasoning":"nonstream reasoning"},"finish_reason":"stop"}]}`),
+		&paramAny,
+	)
+	if len(out) == 0 {
+		t.Fatalf("expected non-empty output")
+	}
+	thinking := nonStreamThinkingBlocks(t, out[0])
+	if len(thinking) != 1 || string(thinking[0]) != "nonstream reasoning" {
+		t.Fatalf("thinking blocks = %v, want [nonstream reasoning] (out=%s)", thinking, out[0])
+	}
+}
+
+func TestNonStreamReasoning_NonStreamEntryFallback(t *testing.T) {
+	out := ConvertOpenAIResponseToClaudeNonStream(
+		context.Background(),
+		"",
+		[]byte(`{}`),
+		nil,
+		[]byte(`{"id":"c1","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"answer","reasoning":"entry reasoning"},"finish_reason":"stop"}]}`),
+		nil,
+	)
+	thinking := nonStreamThinkingBlocks(t, out)
+	if len(thinking) != 1 || string(thinking[0]) != "entry reasoning" {
+		t.Fatalf("thinking blocks = %v, want [entry reasoning] (out=%s)", thinking, out)
+	}
+}
+
+func TestNonStreamReasoning_NonStreamPrefersReasoningContent(t *testing.T) {
+	out := ConvertOpenAIResponseToClaudeNonStream(
+		context.Background(),
+		"",
+		[]byte(`{}`),
+		nil,
+		[]byte(`{"id":"c1","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"answer","reasoning_content":"deepseek style","reasoning":"openrouter style"},"finish_reason":"stop"}]}`),
+		nil,
+	)
+	thinking := nonStreamThinkingBlocks(t, out)
+	if len(thinking) != 1 || string(thinking[0]) != "deepseek style" {
+		t.Fatalf("thinking blocks = %v, want [deepseek style] (out=%s)", thinking, out)
+	}
+}

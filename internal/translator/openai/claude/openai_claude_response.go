@@ -173,8 +173,13 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 			// Don't send content_block_start for text here - wait for actual content
 		}
 
-		// Handle reasoning content delta
-		if reasoning := delta.Get("reasoning_content"); reasoning.Exists() {
+		// Handle reasoning content delta. Falls back to the OpenRouter-style
+		// "reasoning" field when "reasoning_content" is absent or empty.
+		reasoning := delta.Get("reasoning_content")
+		if !reasoning.Exists() || reasoning.String() == "" {
+			reasoning = delta.Get("reasoning")
+		}
+		if reasoning.Exists() {
 			for _, reasoningText := range collectOpenAIReasoningTexts(reasoning) {
 				if reasoningText == "" {
 					continue
@@ -347,7 +352,12 @@ func convertOpenAINonStreamingToAnthropic(rawJSON []byte) [][]byte {
 		choice := choices.Array()[0] // Take first choice
 		var contentBlocks [][]byte
 
+		// Fall back to the OpenRouter-style "reasoning" field when
+		// "reasoning_content" is absent or empty.
 		reasoningNode := choice.Get("message.reasoning_content")
+		if !reasoningNode.Exists() || reasoningNode.String() == "" {
+			reasoningNode = choice.Get("message.reasoning")
+		}
 		for _, reasoningText := range collectOpenAIReasoningTexts(reasoningNode) {
 			if reasoningText == "" {
 				continue
@@ -706,7 +716,13 @@ func ConvertOpenAIResponseToClaudeNonStream(_ context.Context, _ string, origina
 				}
 			}
 
-			if reasoning := message.Get("reasoning_content"); reasoning.Exists() {
+			// Fall back to the OpenRouter-style "reasoning" field when
+			// "reasoning_content" is absent or empty.
+			reasoning := message.Get("reasoning_content")
+			if !reasoning.Exists() || reasoning.String() == "" {
+				reasoning = message.Get("reasoning")
+			}
+			if reasoning.Exists() {
 				for _, reasoningText := range collectOpenAIReasoningTexts(reasoning) {
 					if reasoningText == "" {
 						continue
